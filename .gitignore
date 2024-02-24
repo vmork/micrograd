@@ -1,0 +1,11 @@
+micrograd/data/
+
+__pycache__
+
+.pytest_cache/
+
+.vscode/
+
+venv/
+
+NOTES.md
