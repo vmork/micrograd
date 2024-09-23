@@ -3,7 +3,7 @@ import numpy as np
 from micrograd.core import Op
 from micrograd.conv import convolve2D, pad2D
 
-TensorData = np.ndarray
+type TensorData = np.ndarray
 
 class Add(Op):
     broadcastable = True
@@ -120,6 +120,7 @@ class Sum(Op):
         shape, bshape = ctx['shape'], ctx['bshape']
         return np.broadcast_to(gy.reshape(bshape), shape)
 
+# matrix multiplication of two atleast 2D tensors
 class Matmul(Op):
     @staticmethod
     def forward(ctx: dict, a: TensorData, b: TensorData):
@@ -131,20 +132,17 @@ class Matmul(Op):
         a, b = ctx['a'], ctx['b']
         return gy @ b.T, a.T @ gy
 
-class BatchMM(Op):
-    # row i of the input matrix X is the vector x_i
-    # row i of the reulting matrix y equals A @ x_i
-    # ie: BatchMM(A, X) = (A @ X.T).T = X @ A.T
+# dot product of two 1D tensors
+class DotProd(Op):
     @staticmethod 
-    def forward(ctx: dict, a: TensorData, x: TensorData):
-        ctx['a'] = a; ctx['x'] = x 
-        return x @ a.T
-
-    # can be derived from matmul derivative rules
+    def forward(ctx: dict, a: TensorData, b: TensorData):
+        ctx['a'] = a; ctx['b'] = b
+        return np.dot(a, b)
+    
     @staticmethod 
     def backward(ctx: dict, gy: TensorData):
-        a, x = ctx['a'], ctx['x']
-        return gy.T @ x, gy @ a
+        a, b = ctx['a'], ctx['b']
+        return gy*b, gy*a
 
 class Id(Op):
     @staticmethod 

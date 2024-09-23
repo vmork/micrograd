@@ -41,7 +41,7 @@ class Linear(Module):
         xb, xn = x.shape 
         assert xn == self.insize
 
-        y = ops.BatchMM.apply(self.weight, x) + self.bias
+        y = x.batchmm(self.weight) + self.bias
         
         assert y.shape == (xb, self.outsize)
         return y
@@ -59,7 +59,7 @@ class Sequential(Module):
         return x
 
     def parameters(self) -> list[Tensor]:
-        return [p for m in self.layers for p in m.parameters]
+        return [p for m in self.layers for p in m.parameters()]
     
     def apply(self, fn):
         for m in self.layers:
@@ -80,7 +80,7 @@ class Flatten(Module):
         self.start = start_dim
         self.end = end_dim 
     def forward(self, x: Tensor) -> Tensor:
-        return x.view(*x.shape[:self.start], -1, *x.shape[self.end:][1:])
+        return x.view((*x.shape[:self.start], -1, *x.shape[self.end:][1:]))
 
 # -- Activation functions --
                 

@@ -4,50 +4,49 @@ from abc import ABC, abstractmethod
 from functools import wraps
 import numpy as np
 
-TensorData = np.ndarray 
+type TensorData = np.ndarray 
 Shape = tuple[int] | int | None
 
+class ShapeError(Exception):
+    pass
+
 def do_broadcast(*inputs: Tensor) -> tuple[Tensor,...]:
-    """
-    Broadcasts the inputs to the same shape if necessary, returning new nodes that can be backpropagated through correctly.
-    """
+    """Broadcasts the inputs to the same shape if necessary, returning new nodes that can be backpropagated through correctly."""
+
     shapes = [x.shape for x in inputs]
-    bshape = np.broadcast_shapes(*shapes)
-    return tuple(x.broadcast(bshape) if x.shape != bshape else x for x in inputs)
+    try:
+        bshape = np.broadcast_shapes(*shapes)
+        return tuple(x.broadcast(bshape) if x.shape != bshape else x for x in inputs)
+    except ValueError:
+        raise ShapeError(f"Shapes could not be broadcasted: {shapes}") from None
 
 def astuple(x: Any):
     return x if isinstance(x, tuple) else (x,)
 
 class Op(ABC):
-    """
-    Bundles a function f (forward) together with its derivative (backward). 
-    See ops.py for implementations.
-    """
+    """Bundles a function f (forward) together with its derivative (backward). See ops.py for implementations."""
 
     broadcastable = False
 
     @staticmethod
     @abstractmethod
     def forward(ctx: dict, *inputs: TensorData, **kwargs) -> TensorData|tuple[TensorData,...]:
-        """
-        Computes the operation and stores information required for the backward pass in the ctx-dict.
-        """
+        """Does the forward pass and stores information required for the backward pass in the ctx-dict."""
         pass
 
     @staticmethod
     @abstractmethod
     def backward(ctx: dict, *outgrads: TensorData) -> TensorData|tuple[TensorData,...]:
         """
-        Takes outgrads, the gradients of the scalar loss l wrt each of the outputs, ie dl/do for each o,
+        Takes outgrads, the gradients of the scalar loss l wrt each of the outputs, ie dl/dy for each y,
         and returns tuple of gradients wrt the inputs, ie dl/dx for each x.
         """
         pass
 
     @classmethod
     def apply(cls, *inputs: Tensor, **kwargs):
-        """
-        Apply the forward method and build up the graph.
-        """
+        """Applies the forward method and builds up the graph."""
+
         ctx = {}
 
         if cls.broadcastable: inputs = do_broadcast(*inputs)
@@ -62,10 +61,8 @@ class Op(ABC):
         return outputs[0] if len(outputs) == 1 else outputs
 
 class OpNode:
-    """
-    Operation node in the computation graph, multiple inputs and multiple outputs.
-    Corresponds to Function in pytorch.
-    """
+    """Operation node in the computation graph, multiple inputs and multiple outputs. Corresponds to Function in pytorch."""
+    
     def __init__(self, op: type[Op], ctx: dict, *inputs: Tensor):
         self.op = op 
         self.ctx = ctx
@@ -90,14 +87,15 @@ import micrograd.ops as ops # moved bc circular import issue
 def wrap_numeric(f: Callable) -> Callable:
     @wraps(f)
     def _wrapper(self, other):
-        other = Tensor(other) if isinstance(other, (int, float)) else other
-        return f(self, other)
+        if isinstance(other, Tensor): return f(self, other)
+        if isinstance(other, (int, float, np.ndarray)): return f(self, Tensor(other))
+        raise ValueError(f"Unsupported operand types for {f.__name__}: {type(self).__name__} and {type(other).__name__}")
     return _wrapper
 
 class Tensor:
     def __init__(self, data: TensorData|int|float, source: OpNode|None=None, name:str|None=None):
         self.data: TensorData = data if isinstance(data, np.ndarray) else np.array(data)
-        # self.data = self.data.astype(np.float32)
+        self.data = self.data.astype(np.float32)
         self.grad = np.zeros_like(data, dtype=np.float32)
         self.source = source
         self.name = name or "."
@@ -105,7 +103,7 @@ class Tensor:
     def _topo_order(self) -> reversed[OpNode]:
         t = []
         visited = set()
-        def _dfs(n: Any):
+        def _dfs(n: OpNode | Tensor):
             children = n.inputs if type(n) == OpNode else (n.source,)
             for c in children:
                 if c in visited or c is None: continue 
@@ -179,6 +177,9 @@ class Tensor:
     def __getitem__(self, idx: tuple[int|slice]) -> Tensor:
         return ops.Select.apply(self, idx=idx)
     
+    def __len__(self):
+        return len(self.data)
+    
     def log(self) -> Tensor:
         return ops.Log.apply(self) 
 
@@ -199,11 +200,21 @@ class Tensor:
     def transpose(self) -> Tensor:
         return ops.Transpose.apply(self)
     
+    @wrap_numeric
     def matmul(self, other) -> Tensor:
+        s1, s2 = self.shape, other.shape
+        if len(s1) == 1 and len(s2) == 1:
+            return ops.DotProd.apply(self, other)
+        if len(s1) < 2 or len(s2) < 2:
+            raise ShapeError(f"Matmul shape error: got {s1} @ {s2}")
+        (*bs1, n,k1), (*bs2, k2,m) = s1, s2 
+        if (k1 != k2):
+            raise ShapeError(f"Matmul shape error: got {s1} @ {s2}")
         return ops.Matmul.apply(self, other) 
     
+    @wrap_numeric
     def batchmm(self, other) -> Tensor:
-        return ops.BatchMM.apply(self, other)
+        return self.matmul(other.T)
 
     def sigmoid(self) -> Tensor:
         return ops.Sigmoid.apply(self)
@@ -221,7 +232,7 @@ class Tensor:
         return ops.Broadcast.apply(self, shape=shape)
     
     def __repr__(self):
-        return f"T({self.name}, d={self.data}, g={self.grad})"
+        return f"Tensor('{self.name}', d={repr(self.data)}, g={repr(self.grad)}, s={self.shape}) "
 
 if __name__ == "__main__":
     x = Tensor(np.ones((5,1)))

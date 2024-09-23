@@ -2,8 +2,9 @@
 
 import numpy as np
 import torch
+import pytest
 
-from micrograd.core import Tensor, OpNode, TensorData
+from micrograd.core import Tensor, OpNode, TensorData, ShapeError
 import micrograd.nn as nn
 
 def test_ops():
@@ -63,9 +64,42 @@ def test_matmul():
     z = x @ y
     assert z.data.shape == (2, 4)
     assert np.allclose(z.data, 3)
-    # z.sum().backward()
-    # assert np.allclose(x.grad, x.data @ y.data.T)
-    # assert np.allclose(y.grad, x.data.T @ y.data)
+    z.sum().backward()
+    assert np.allclose(x.grad, z.grad @ y.data.T)
+    assert np.allclose(y.grad, x.data.T @ z.grad)
+
+def test_batchmm():
+    x = Tensor(np.ones((10, 3)))
+    y = Tensor(np.ones((5, 3)))
+    z = x.batchmm(y)
+    z.sum().backward()
+
+    xt = torch.tensor(np.ones((10, 3)), requires_grad=True)
+    yt = torch.tensor(np.ones((5, 3)), requires_grad=True)
+    zt = xt @ yt.T
+    zt.sum().backward()
+
+    assert z.data.shape == zt.data.shape == (10, 5)
+    assert np.allclose(z.data, zt.data)
+    assert np.allclose(x.grad, xt.grad.numpy())
+
+def test_dotprod():
+    x = Tensor(np.ones(10))
+    y = Tensor(np.ones(10)*3)
+    z = x @ y 
+    z.sum().backward()
+    assert np.allclose(x.grad, y.data)
+    assert np.allclose(y.grad, x.data)
+
+def test_matmul_fail():
+    with pytest.raises(ShapeError):
+        z = Tensor(np.ones((2, 3))) @ Tensor(np.ones((2, 3)))
+    with pytest.raises(ShapeError):
+        z = Tensor(np.array(1)) @ Tensor(np.array(1))
+    with pytest.raises(ShapeError):
+        z = Tensor(np.array(1)) @ Tensor(np.array([1,2,3]))
+    with pytest.raises(ShapeError):
+        z = Tensor(np.array([1])) @ Tensor(np.array([[1,2,3]]))
 
 def test_broadcast1():
     x = Tensor(np.ones((3,1)))
